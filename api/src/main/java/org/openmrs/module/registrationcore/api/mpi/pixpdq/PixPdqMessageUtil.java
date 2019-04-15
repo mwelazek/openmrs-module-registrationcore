@@ -17,6 +17,7 @@ import ca.uhn.hl7v2.util.Terser;
 import org.apache.commons.lang.StringUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.codehaus.groovy.util.StringUtil;
 import org.openmrs.Location;
 import org.openmrs.Patient;
 import org.openmrs.PatientIdentifier;
@@ -178,6 +179,84 @@ public class PixPdqMessageUtil {
         return queryParams;
     }
 
+    public List<Map.Entry<String, String>> patientToQPD3Params(Patient patient, Map<String, Object> otherDataPoints){
+        List<Map.Entry<String, String>> queryParams = new ArrayList<Map.Entry<String, String>>();
+        if (patient == null){
+            return null;
+        }
+        // Add Names to query
+        if(StringUtils.isNotBlank(patient.getFamilyName())){
+            queryParams.add(new AbstractMap.SimpleEntry("@PID.5.1", patient.getFamilyName()));
+        }
+        if(StringUtils.isNotBlank(patient.getGivenName())){
+            queryParams.add(new AbstractMap.SimpleEntry("@PID.5.2", patient.getGivenName()));
+        }
+
+        // ADD NATIONAL ID QUERY - MODIFICATION : TEBOHO
+        if(otherDataPoints != null && otherDataPoints.containsKey("nationalID") && otherDataPoints.get("nationalID") != null) {
+            queryParams.add(new AbstractMap.SimpleEntry("@PID.19", otherDataPoints.get("nationalID")));
+        }
+
+        // Add Identifiers to query
+        Set<PatientIdentifier> identifiers = patient.getIdentifiers();
+        if(identifiers != null && !identifiers.isEmpty()){
+            for (PatientIdentifier patIdentifier : identifiers) {
+                String mappedMpiUuid = identifierMapper.getMappedMpiIdentifierTypeId(patIdentifier.getIdentifierType().getUuid());
+                if (StringUtils.isNotBlank(patIdentifier.getIdentifier())
+                        && StringUtils.isNotBlank(mappedMpiUuid)) {
+                    // We need to change the datatype so that it can have multiple with the same key
+                    queryParams.add(new AbstractMap.SimpleEntry("@PID.3.1", patIdentifier.getIdentifier()));
+                    queryParams.add(new AbstractMap.SimpleEntry("@PID.3.4", mappedMpiUuid));
+                }
+            }
+        }
+        // Add Gender to query
+        if(StringUtils.isNotBlank(patient.getGender())){
+            queryParams.add(new AbstractMap.SimpleEntry("@PID.8", patient.getGender()));
+        }
+        // Add Date of Birth to query (?) what if its an estimate?
+        if(patient.getBirthdate() != null){
+            String birthdate;
+            if(patient.getBirthdateEstimated()){
+                birthdate = new SimpleDateFormat("yyyy").format(patient.getBirthdate());
+            }
+            else{
+                birthdate = new SimpleDateFormat("yyyyMMdd").format(patient.getBirthdate());
+            }
+            queryParams.add(new AbstractMap.SimpleEntry("@PID.7", birthdate));
+        }
+        // Add Address to query
+        if (!patient.getAddresses().isEmpty()){
+            PersonAddress pa = patient.getAddresses().iterator().next();
+            if(StringUtils.isNotBlank(pa.getAddress1())) {
+                queryParams.add(new AbstractMap.SimpleEntry("@PID.11.1", pa.getAddress1()));
+            }
+            if(StringUtils.isNotBlank(pa.getAddress2())
+                    && StringUtils.isNotBlank(pa.getAddress3())){
+                queryParams.add(new AbstractMap.SimpleEntry("@PID.11.2", pa.getAddress2() + " " + pa.getAddress3()));
+            }
+            else if (StringUtils.isNotBlank(pa.getAddress2())){
+                queryParams.add(new AbstractMap.SimpleEntry("@PID.11.2", pa.getAddress2()));
+            }
+            if(StringUtils.isNotBlank(pa.getCityVillage())) {
+                queryParams.add(new AbstractMap.SimpleEntry("@PID.11.3", pa.getCityVillage()));
+            }
+            if(StringUtils.isNotBlank(pa.getCountry())) {
+                queryParams.add(new AbstractMap.SimpleEntry("@PID.11.6", pa.getCountry()));
+            }
+            if(StringUtils.isNotBlank(pa.getCountyDistrict())) {
+                queryParams.add(new AbstractMap.SimpleEntry("@PID.11.9", pa.getCountyDistrict()));
+            }
+            if(StringUtils.isNotBlank(pa.getPostalCode())) {
+                queryParams.add(new AbstractMap.SimpleEntry("@PID.11.5", pa.getPostalCode()));
+            }
+            if(StringUtils.isNotBlank(pa.getStateProvince())) {
+                queryParams.add(new AbstractMap.SimpleEntry("@PID.11.4", pa.getStateProvince()));
+            }
+        }
+        return queryParams;
+    }
+
     private void updateMSH(MSH msh, String messageCode, String triggerEvent) throws DataTypeException {
         msh.getFieldSeparator().setValue("|");
         msh.getEncodingCharacters().setValue("^~\\&");
@@ -225,6 +304,7 @@ public class PixPdqMessageUtil {
                 PID pid = (PID)pidStruct;
                 MpiPatient patient = new MpiPatient();
                 // Attempt to load a patient by identifier
+
                 for (CX id : pid.getPatientIdentifierList()) {
 
                     PatientIdentifierType pit = null;
@@ -252,6 +332,20 @@ public class PixPdqMessageUtil {
                     }
 
                     patient.addIdentifier(patId);
+                }
+
+                if(StringUtils.isNotBlank(pid.getSSNNumberPatient().getValue())) {
+                    String nationalID = pid.getSSNNumberPatient().getValue();
+                    PatientIdentifierType pitNationalId = Context.getPatientService().getPatientIdentifierTypeByUuid(
+                            "0d2ac572-8de3-46c8-9976-1f78899c599f");
+
+                    PatientIdentifier nationalIdPatId = new PatientIdentifier(
+                            pid.getSSNNumberPatient().getValue(),
+                            pitNationalId,
+                            defaultLocation
+                    );
+
+                    patient.addIdentifier(nationalIdPatId);
                 }
 
                 // Attempt to copy names
@@ -304,16 +398,45 @@ public class PixPdqMessageUtil {
                 }
                 patient.setDead("Y".equals(pid.getPatientDeathIndicator().getValue()));
 
+
+                /*XAD xad = pid.getPatientAddress(pid.getPatientAddress().length);
+                if(pa.getAddress1() != null)
+                    xad.getStreetAddress().getStreetOrMailingAddress().setValue(pa.getAddress1());
+                if(pa.getAddress2() != null) {
+                    //xad.getOtherDesignation().setValue(pa.getAddress2());
+                    xad.getStreetAddress().getStreetOrMailingAddress().setValue(pa.getAddress2());
+                }
+                if(pa.getAddress3() != null)
+                    xad.getOtherDesignation().setValue(xad.getOtherDesignation() + " " + pa.getAddress3());
+                if(pa.getCityVillage() != null) {
+                    //xad.getCity().setValue(pa.getCityVillage());
+                    xad.getOtherDesignation().setValue(pa.getCityVillage());
+                    // Also set country name
+                    xad.getCountry().setValue("LESOTHO");
+                }
+                if(pa.getCountry() != null)
+                    xad.getCountry().setValue(pa.getCountry());
+                if(pa.getCountyDistrict() != null)
+                    xad.getCountyParishCode().setValue(pa.getCountyDistrict());
+                if(pa.getPostalCode() != null)
+                    xad.getZipOrPostalCode().setValue(pa.getPostalCode());
+                if(pa.getStateProvince() != null) {
+                    //xad.getStateOrProvince().setValue(pa.getStateProvince());
+                    xad.getCity().setValue(pa.getStateProvince());
+                }*/
+
+
                 // Addresses
                 for (XAD xad : pid.getPatientAddress()) {
                     PersonAddress pa = new PersonAddress();
                     pa.setAddress1(xad.getStreetAddress().getStreetOrMailingAddress().getValue());
-                    pa.setAddress2(xad.getOtherDesignation().getValue());
-                    pa.setCityVillage(xad.getCity().getValue());
-                    pa.setCountry(xad.getCountry().getValue());
+                    pa.setAddress2(xad.getStreetAddress().getStreetOrMailingAddress().getValue());
+                    pa.setCityVillage(xad.getOtherDesignation().getValue());
+                    //pa.setCountry(xad.getCountry().getValue());
+                    pa.setCountry("LESOTHO");
                     pa.setCountyDistrict(xad.getCountyParishCode().getValue());
                     pa.setPostalCode(xad.getZipOrPostalCode().getValue());
-                    pa.setStateProvince(xad.getStateOrProvince().getValue());
+                    pa.setStateProvince(xad.getCity().getValue());
                     if ("H".equals(xad.getAddressType().getValue())) {
                         pa.setPreferred(true);
                     }
@@ -427,25 +550,32 @@ public class PixPdqMessageUtil {
 
         PersonAddress pa = patient.getAddresses().iterator().next();
 
-        // Addresses
+        // Addresses NB: HAVE TO RE-ALIGN ADDRESS FIELDS DUE TO THE WAY BAHMNI IS STORING ITS ADDRESS
         XAD xad = pid.getPatientAddress(pid.getPatientAddress().length);
         if(pa.getAddress1() != null)
             xad.getStreetAddress().getStreetOrMailingAddress().setValue(pa.getAddress1());
-        if(pa.getAddress2() != null)
-            xad.getOtherDesignation().setValue(pa.getAddress2());
+        if(pa.getAddress2() != null) {
+            //xad.getOtherDesignation().setValue(pa.getAddress2());
+            xad.getStreetAddress().getStreetOrMailingAddress().setValue(pa.getAddress2());
+        }
         if(pa.getAddress3() != null)
             xad.getOtherDesignation().setValue(xad.getOtherDesignation() + " " + pa.getAddress3());
-        if(pa.getCityVillage() != null)
-            xad.getCity().setValue(pa.getCityVillage());
+        if(pa.getCityVillage() != null) {
+            //xad.getCity().setValue(pa.getCityVillage());
+            xad.getOtherDesignation().setValue(pa.getCityVillage());
+            // Also set country name
+            xad.getCountry().setValue("LESOTHO");
+        }
         if(pa.getCountry() != null)
             xad.getCountry().setValue(pa.getCountry());
         if(pa.getCountyDistrict() != null)
             xad.getCountyParishCode().setValue(pa.getCountyDistrict());
         if(pa.getPostalCode() != null)
             xad.getZipOrPostalCode().setValue(pa.getPostalCode());
-        if(pa.getStateProvince() != null)
-            xad.getStateOrProvince().setValue(pa.getStateProvince());
-
+        if(pa.getStateProvince() != null) {
+            //xad.getStateOrProvince().setValue(pa.getStateProvince());
+            xad.getCity().setValue(pa.getStateProvince());
+        }
         if(pa.getPreferred())
             xad.getAddressType().setValue("L");
 

@@ -99,6 +99,9 @@ public interface RegistrationCoreService extends OpenmrsService {
 	List<PatientAndMatchQuality> findFastSimilarPatients(Patient patient, Map<String, Object> otherDataPoints,
 	                                                     Double cutoff, Integer maxResults);
 
+	public List<Patient> findFastSimilarOMRSPatients(Patient patient, Map<String, Object> otherDataPoints,
+			Double cutoff, Integer maxResults);
+
 	/**
 	 * Returns a list of matching patients using the precise algorithm.
 	 * <p>
@@ -141,6 +144,17 @@ public interface RegistrationCoreService extends OpenmrsService {
 	 * @should fail if more than one patient exits in the MPI for that specific identifier and identifier type
 	 */
 	MpiPatient findMpiPatient(String identifier, String identifierTypeUuid);
+
+
+	/**
+	 * Query to MPI server to find a single patient with Identifier of IdentifierType with IdentifierTypeUuid provided.
+	 *
+	 * @param identifier person identifier of patient to be found
+	 * @param identifierTypeUuid person identifier type of patient which will be found
+	 * @return found patient
+	 * @should fail if more than one patient exits in the MPI for that specific identifier and identifier type
+	 */
+	Patient findOMRSPatient(String identifier, String identifierTypeUuid);
 
 	/**
 	 * Import a specific patient by sending

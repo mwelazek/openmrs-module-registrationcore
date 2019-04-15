@@ -38,7 +38,7 @@ public class PdqSimilarPatientsSearcher implements MpiSimilarPatientsSearcher {
 
     @Override
     public List<PatientAndMatchQuality> findSimilarMatches(Patient patient, Map<String, Object> otherDataPoints, Double cutoff, Integer maxResults) {
-        return find(patient, maxResults);
+        return find(patient, otherDataPoints, maxResults);
     }
 
     @Override
@@ -58,6 +58,42 @@ public class PdqSimilarPatientsSearcher implements MpiSimilarPatientsSearcher {
                 Message response = hl7v2Sender.sendPdqMessage(pdqRequest);
 		        mpiPatientList = pixPdqMessageUtil.interpretPIDSegments(response);
 	        }
+        } catch (Exception e) {
+            log.error("Error in PDQ Search", e);
+            ErrorHandlingService errorHandler = registrationCoreProperties.getPdqErrorHandlingService();
+            if (errorHandler != null) {
+                errorHandler.handle(e.getMessage(),
+                        "org.openmrs.module.registrationcore.api.mpi.pixpdq.PdqSimilarPatientsSearcher",
+                        true, ExceptionUtils.getFullStackTrace(e));
+            }
+        }
+
+        if (maxResults != null && mpiPatientList.size() > maxResults) {
+            mpiPatientList = mpiPatientList.subList(0, maxResults);
+        }
+        List<? extends Patient> retVal = mpiPatientList;
+        return toMatchList(patient, retVal);
+    }
+
+    private List<PatientAndMatchQuality> find(Patient patient, Map<String, Object> otherDataPoints, Integer maxResults) {
+
+        List<MpiPatient> mpiPatientList = new LinkedList<MpiPatient>();
+
+        try {
+            List<Map.Entry<String, String>> queryParams = null;
+
+            if(otherDataPoints != null && otherDataPoints.containsKey("nationalID") && otherDataPoints.get("nationalID") != null){
+                queryParams = pixPdqMessageUtil.patientToQPD3Params(patient, otherDataPoints);
+            } else {
+                queryParams = pixPdqMessageUtil.patientToQPD3Params(patient);
+            }
+
+            if (!queryParams.isEmpty()){
+                Message pdqRequest = pixPdqMessageUtil.createPdqMessage(queryParams);
+                Hl7v2Sender hl7v2Sender = (Hl7v2Sender) registrationCoreProperties.getBeanFromName(RegistrationCoreConstants.GP_MPI_HL7_IMPLEMENTATION);
+                Message response = hl7v2Sender.sendPdqMessage(pdqRequest);
+                mpiPatientList = pixPdqMessageUtil.interpretPIDSegments(response);
+            }
         } catch (Exception e) {
             log.error("Error in PDQ Search", e);
             ErrorHandlingService errorHandler = registrationCoreProperties.getPdqErrorHandlingService();
@@ -128,6 +164,7 @@ public class PdqSimilarPatientsSearcher implements MpiSimilarPatientsSearcher {
                         matchedFields.add("addresses.cityVillage");
                         score += 0.125;
                     }
+
                     if(personAddress.getCountyDistrict() != null && matchAddress.getCountyDistrict() != null
                             && personAddress.getCountyDistrict().toLowerCase().equals(matchAddress.getCountyDistrict().toLowerCase())) {
                         matchedFields.add("addresses.countryDistrict");
